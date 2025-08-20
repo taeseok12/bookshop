@@ -1,0 +1,183 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+                        "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+       <mapper namespace="mapper.BookMapper">
+
+  <!-- 전체 목록 (최신순) -->
+  <select id="findAllBooks" resultType="model.Book">
+    SELECT book_id   AS bookId,
+           title,
+           author,
+           description,
+           price,
+           stock,
+           cover_image AS coverImage
+    FROM books
+    ORDER BY book_id DESC
+  </select>
+
+  <!-- 단일 조회 -->
+  <select id="findBookById" parameterType="long" resultType="model.Book">
+    SELECT book_id   AS bookId,
+           title,
+           author,
+           description,
+           price,
+           stock,
+           cover_image AS coverImage
+    FROM books
+    WHERE book_id = #{bookId}
+  </select>
+
+<!-- 검색(옵션 페이징) -->
+<select id="searchBooksByKeyword" resultType="model.Book">
+  SELECT book_id AS bookId,
+         title, author, description, price, stock,
+         cover_image AS coverImage
+  FROM books
+  WHERE (
+      -- 일반 부분일치 (대소문자 무시)
+      UPPER(title)  LIKE '%' || UPPER(#{keyword}) || '%'
+      OR UPPER(author) LIKE '%' || UPPER(#{keyword}) || '%'
+      -- 띄어쓰기 제거 후 비교
+      OR REPLACE(UPPER(title), ' ', '')  LIKE '%' || REPLACE(UPPER(#{keyword}), ' ', '') || '%'
+      OR REPLACE(UPPER(author), ' ', '') LIKE '%' || REPLACE(UPPER(#{keyword}), ' ', '') || '%'
+  )
+  ORDER BY book_id DESC
+  <if test="offset != null and limit != null">
+    OFFSET #{offset} ROWS FETCH NEXT #{limit} ROWS ONLY
+  </if>
+</select>
+
+<!-- 카운트 (페이지네이션용) -->
+<select id="countByKeyword" parameterType="string" resultType="int">
+  SELECT COUNT(*)
+  FROM books
+  WHERE (
+      UPPER(title)  LIKE '%' || UPPER(#{keyword}) || '%'
+      OR UPPER(author) LIKE '%' || UPPER(#{keyword}) || '%'
+      OR REPLACE(UPPER(title), ' ', '')  LIKE '%' || REPLACE(UPPER(#{keyword}), ' ', '') || '%'
+      OR REPLACE(UPPER(author), ' ', '') LIKE '%' || REPLACE(UPPER(#{keyword}), ' ', '') || '%'
+  )
+</select>
+
+<!-- 자동완성/실시간 미리보기 Top N -->
+<select id="suggestBooks" resultType="model.Book">
+  SELECT book_id AS bookId,
+         title, author, cover_image AS coverImage
+  FROM books
+  WHERE (
+      UPPER(title)  LIKE '%' || UPPER(#{keyword}) || '%'
+      OR UPPER(author) LIKE '%' || UPPER(#{keyword}) || '%'
+      OR REPLACE(UPPER(title), ' ', '')  LIKE '%' || REPLACE(UPPER(#{keyword}), ' ', '') || '%'
+      OR REPLACE(UPPER(author), ' ', '') LIKE '%' || REPLACE(UPPER(#{keyword}), ' ', '') || '%'
+  )
+  ORDER BY book_id DESC
+  FETCH NEXT #{limit} ROWS ONLY
+</select>
+
+
+  <!-- 가격대검색 -->
+  <select id="searchBooksByPriceRange" parameterType="map" resultType="model.Book">
+    SELECT * FROM books
+    WHERE price BETWEEN #{min} AND #{max}
+    ORDER BY price
+  </select>
+
+  <!-- 재고 수정 -->
+  <update id="updateBookStock">
+    UPDATE books 
+       SET stock = #{stock}
+     WHERE book_id = #{bookId}
+  </update>
+
+  <!-- 할인 적용 -->
+  <update id="updateBooksPrice">
+    UPDATE books
+       SET price = ROUND(price * (1 + #{discountPercent} / 100))
+  </update>
+
+  <!-- 재고 차감 -->
+  <update id="decreaseStock">
+    UPDATE books
+       SET stock = stock - #{quantity}
+     WHERE book_id = #{bookId}
+  </update>
+
+  <!-- 기타 관리 기능들 (insert/update/delete) -->
+  <insert id="insertBook" parameterType="model.Book">
+    INSERT INTO books(title, author, description, price, stock, cover_image)
+    VALUES (#{title}, #{author}, #{description}, #{price}, #{stock}, #{coverImage})
+  </insert>
+
+  <update id="updateBook" parameterType="model.Book">
+    UPDATE books
+       SET title       = #{title},
+           author      = #{author},
+           description = #{description},
+           price       = #{price},
+           stock       = #{stock},
+           cover_image = #{coverImage}
+     WHERE book_id = #{bookId}
+  </update>
+
+  <delete id="deleteBook" parameterType="long">
+    DELETE FROM books WHERE book_id = #{bookId}
+  </delete>
+  
+    
+      <select id="findByIdList" parameterType="list" resultType="model.Book">
+    SELECT
+      book_id   AS bookId,
+      title,
+      author,
+      description,
+      price,
+      stock,
+      cover_image AS coverImage
+    FROM books
+    WHERE book_id IN
+    <foreach collection="ids" item="id" open="(" close=")" separator=",">
+      #{id}
+    </foreach>
+  </select>
+  
+    <!-- 재고 차감: 재고가 충분할 때만 감소 (동시성 안전) -->
+  <update id="decrementStock">
+    UPDATE books
+       SET stock = stock - #{qty}
+     WHERE book_id = #{bookId}
+       AND stock >= #{qty}
+  </update>
+
+<select id="findByIds" resultType="model.Book">
+    SELECT * 
+    FROM books
+    WHERE book_id IN
+    <foreach collection="list" item="id" open="(" separator="," close=")">
+        #{id}
+    </foreach>
+</select>
+    
+    <!--페이징에 사용 -->
+  <select id="countBooks" resultType="int">
+    SELECT COUNT(*) 
+    FROM books
+  </select>
+
+  <!-- 정렬: 최신 등록순 -->
+  <select id="findBooksPage" resultType="model.Book">
+   SELECT book_id AS bookId,
+       title,
+       author,
+       description,
+       price,
+       stock,
+       cover_image AS coverImage
+FROM books
+ORDER BY book_id DESC
+OFFSET #{offset} ROWS FETCH NEXT #{limit} ROWS ONLY
+  </select>
+</mapper>
+
+                        
