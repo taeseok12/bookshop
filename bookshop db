@@ -1,0 +1,424 @@
+-- ====================================
+-- 1) USERS
+-- ====================================
+
+-- 1-1) 시퀀스: users.user_id 자동 증가
+CREATE SEQUENCE seq_users
+  START WITH 1
+  INCREMENT BY 1
+  NOCACHE
+  NOCYCLE;
+
+-- 1-2) 테이블 정의 (active 포함)
+CREATE TABLE users (
+  user_id  NUMBER        NOT NULL,                        -- PK: 내부 식별자
+  login_id VARCHAR2(30)  NOT NULL,                        -- 로그인용 아이디(중복 불가)
+  password VARCHAR2(100) NOT NULL,                        -- 비밀번호 해시
+  name     VARCHAR2(20)  NOT NULL,                        -- 실명 또는 표시명
+  email    VARCHAR2(50)  NOT NULL,                        -- 이메일(중복 불가)
+  hp       VARCHAR2(20),                                  -- 휴대폰 번호(선택)
+  role     VARCHAR2(20)  DEFAULT 'ROLE_CUSTOMER' NOT NULL,-- 권한
+  active   CHAR(1)       DEFAULT 'Y' NOT NULL,            -- 접속 가능 여부(Y/N)
+  CONSTRAINT pk_users         PRIMARY KEY (user_id),
+  CONSTRAINT uk_users_login   UNIQUE (login_id),
+  CONSTRAINT uk_users_email   UNIQUE (email),
+  CONSTRAINT chk_users_role   CHECK (role IN ('ROLE_CUSTOMER','ROLE_ADMIN')),
+  CONSTRAINT chk_users_active CHECK (active IN ('Y','N'))
+);
+
+-- 1-3) 트리거: INSERT 시 user_id에 시퀀스 값 할당
+CREATE OR REPLACE TRIGGER trg_users_bi
+BEFORE INSERT ON users
+FOR EACH ROW
+BEGIN
+  IF :NEW.user_id IS NULL THEN
+    SELECT seq_users.NEXTVAL INTO :NEW.user_id FROM dual;
+  END IF;
+END;
+/
+-- ====================================
+-- 2) BOOKS
+-- ====================================
+
+-- 2-1) 시퀀스: books.book_id 자동 증가
+CREATE SEQUENCE seq_books
+  START WITH 1
+  INCREMENT BY 1
+  NOCACHE
+  NOCYCLE;
+
+-- 2-2) 테이블 정의
+CREATE TABLE books (
+  book_id     NUMBER         NOT NULL,       -- PK
+  title       VARCHAR2(100)  NOT NULL,       -- 도서 제목
+  author      VARCHAR2(50)   NOT NULL,       -- 저자명
+  description CLOB,                           -- 상세 설명(길이 무제한)
+  price       NUMBER(10)     NOT NULL,       -- 판매가(0 이상)
+  stock       NUMBER(10)     DEFAULT 0 NOT NULL, -- 재고 수량(음수 불가)
+  cover_image VARCHAR2(300),                 -- 표지 이미지 URL
+  CONSTRAINT pk_books        PRIMARY KEY (book_id),
+  CONSTRAINT chk_books_price CHECK (price >= 0),
+  CONSTRAINT chk_books_stock CHECK (stock >= 0)
+);
+
+-- 2-3) 트리거
+CREATE OR REPLACE TRIGGER trg_books_bi
+BEFORE INSERT ON books
+FOR EACH ROW
+BEGIN
+  IF :NEW.book_id IS NULL THEN
+    SELECT seq_books.NEXTVAL INTO :NEW.book_id FROM dual;
+  END IF;
+END;
+/
+
+-- (선택) 시퀀스/제약 확인용 조회
+-- SELECT sequence_name FROM user_sequences WHERE sequence_name = 'SEQ_BOOKS';
+-- SELECT constraint_name, constraint_type, table_name, search_condition, r_constraint_name FROM user_constraints WHERE table_name = 'BOOKS';
+-- SELECT constraint_name, column_name, position FROM user_cons_columns WHERE table_name = 'BOOKS';
+
+-- ====================================
+-- 3) CARTS
+-- ====================================
+
+-- 3-1) 시퀀스
+CREATE SEQUENCE seq_carts
+  START WITH 1
+  INCREMENT BY 1
+  NOCACHE
+  NOCYCLE;
+
+-- 3-2) 테이블
+CREATE TABLE carts (
+  cart_id NUMBER NOT NULL, -- PK
+  user_id NUMBER NOT NULL, -- FK: users.user_id
+  CONSTRAINT pk_carts      PRIMARY KEY (cart_id),
+  CONSTRAINT fk_carts_user FOREIGN KEY (user_id) REFERENCES users(user_id)
+);
+
+-- 3-3) 트리거
+CREATE OR REPLACE TRIGGER trg_carts_bi
+BEFORE INSERT ON carts
+FOR EACH ROW
+BEGIN
+  IF :NEW.cart_id IS NULL THEN
+    SELECT seq_carts.NEXTVAL INTO :NEW.cart_id FROM dual;
+  END IF;
+END;
+/
+-- ====================================
+-- 4) CART_ITEMS
+-- ====================================
+
+-- 4-1) 시퀀스
+CREATE SEQUENCE seq_cart_items
+  START WITH 1
+  INCREMENT BY 1
+  NOCACHE
+  NOCYCLE;
+
+-- 4-2) 테이블
+CREATE TABLE cart_items (
+  cart_item_id NUMBER       NOT NULL,           -- PK
+  cart_id      NUMBER       NOT NULL,           -- FK: carts.cart_id
+  book_id      NUMBER       NOT NULL,           -- FK: books.book_id
+  quantity     NUMBER(8)    DEFAULT 1 NOT NULL, -- 수량(1 이상)
+  CONSTRAINT pk_cart_items        PRIMARY KEY (cart_item_id),
+  CONSTRAINT fk_cart_items_cart   FOREIGN KEY (cart_id) REFERENCES carts(cart_id) ON DELETE CASCADE,
+  CONSTRAINT fk_cart_items_book   FOREIGN KEY (book_id) REFERENCES books(book_id),
+  CONSTRAINT chk_cart_items_qty   CHECK (quantity >= 1)
+);
+
+-- 4-3) 트리거
+CREATE OR REPLACE TRIGGER trg_cart_items_bi
+BEFORE INSERT ON cart_items
+FOR EACH ROW
+BEGIN
+  IF :NEW.cart_item_id IS NULL THEN
+    SELECT seq_cart_items.NEXTVAL INTO :NEW.cart_item_id FROM dual;
+  END IF;
+END;
+/
+-- ====================================
+-- 5) ORDERS
+-- ====================================
+
+-- 5-1) 시퀀스
+CREATE SEQUENCE seq_orders
+  START WITH 1
+  INCREMENT BY 1
+  NOCACHE
+  NOCYCLE;
+
+-- 5-2) 테이블
+CREATE TABLE orders (
+  order_id     NUMBER       NOT NULL,                       -- PK
+  user_id      NUMBER       NOT NULL,                       -- FK
+  status       VARCHAR2(20) DEFAULT 'PENDING' NOT NULL,
+  total_amount NUMBER(12)   NOT NULL CHECK (total_amount >= 0),
+  address      VARCHAR2(200 CHAR) NOT NULL,
+  postcode     VARCHAR2(10  CHAR) NOT NULL,
+  order_date   DATE         DEFAULT SYSDATE NOT NULL,
+  courier      VARCHAR2(50),
+  tracking_no  VARCHAR2(100),
+  shipped_at   DATE,
+  delivered_at DATE,
+  cancelled_at DATE,
+  CONSTRAINT pk_orders         PRIMARY KEY (order_id),
+  CONSTRAINT fk_orders_user    FOREIGN KEY (user_id) REFERENCES users(user_id),
+  CONSTRAINT chk_orders_status CHECK (status IN ('PENDING','PAID','SHIPPED','DELIVERED','CANCELLED'))
+);
+
+-- 5-3) 트리거
+CREATE OR REPLACE TRIGGER trg_orders_bi
+BEFORE INSERT ON orders
+FOR EACH ROW
+BEGIN
+  IF :NEW.order_id IS NULL THEN
+    SELECT seq_orders.NEXTVAL INTO :NEW.order_id FROM dual;
+  END IF;
+END;
+/
+
+-- 5-4) 인덱스
+CREATE INDEX ix_orders_user_date   ON orders (user_id, order_date DESC);
+CREATE INDEX ix_orders_status_date ON orders (status,  order_date DESC);
+CREATE INDEX ix_orders_tracking_no ON orders (tracking_no);
+
+-- ====================================
+-- 6) ORDER_ITEMS
+-- ====================================
+
+-- 6-1) 시퀀스
+CREATE SEQUENCE seq_order_items
+  START WITH 1
+  INCREMENT BY 1
+  NOCACHE
+  NOCYCLE;
+
+-- 6-2) 테이블
+CREATE TABLE order_items (
+  order_item_id NUMBER      NOT NULL,            -- PK
+  order_id      NUMBER      NOT NULL,            -- FK
+  book_id       NUMBER      NOT NULL,            -- FK
+  quantity      NUMBER(8)   DEFAULT 1 NOT NULL CHECK (quantity >= 1),
+  unit_price    NUMBER(12)  NOT NULL CHECK (unit_price >= 0),
+  CONSTRAINT pk_order_items        PRIMARY KEY (order_item_id),
+  CONSTRAINT fk_order_items_order  FOREIGN KEY (order_id) REFERENCES orders(order_id) ON DELETE CASCADE,
+  CONSTRAINT fk_order_items_book   FOREIGN KEY (book_id) REFERENCES books(book_id)
+);
+
+-- 6-3) 트리거
+CREATE OR REPLACE TRIGGER trg_order_items_bi
+BEFORE INSERT ON order_items
+FOR EACH ROW
+BEGIN
+  IF :NEW.order_item_id IS NULL THEN
+    SELECT seq_order_items.NEXTVAL INTO :NEW.order_item_id FROM dual;
+  END IF;
+END;
+/
+
+-- 6-4) 인덱스
+CREATE INDEX ix_oi_order      ON order_items(order_id);
+CREATE INDEX ix_oi_order_book ON order_items(order_id, book_id);
+
+COMMIT;
+
+-- ====================================
+-- 7) SEED BOOK DATA
+-- ====================================
+
+INSERT INTO books (title, author, description, price, stock) VALUES ('혼모노', '김민섭', '타인의 시선과 편견을 넘어 자신만의 길을 찾는 에세이.', 15800, 100);
+INSERT INTO books (title, author, description, price, stock) VALUES ('불편한 편의점', '김호연', '서울역에 나타난 한 남자와 편의점 사람들의 따뜻한 이야기.', 14000, 100);
+INSERT INTO books (title, author, description, price, stock) VALUES ('역행자', '자청', '인생을 바꾸는 자기혁명과 실천 전략을 담은 자기계발서.', 17500, 100);
+INSERT INTO books (title, author, description, price, stock) VALUES ('세이노의 가르침', '세이노', '삶과 돈에 대한 현실적 조언을 담은 인생 지침서.', 6800, 100);
+INSERT INTO books (title, author, description, price, stock) VALUES ('트렌드 코리아 2025', '김난도 외', '2025년 대한민국을 관통할 10대 소비트렌드 전망.', 19800, 100);
+INSERT INTO books (title, author, description, price, stock) VALUES ('불변의 법칙', '모건 하우절', '부와 성공을 지키는 심리와 행동의 법칙을 설명.', 18000, 100);
+INSERT INTO books (title, author, description, price, stock) VALUES ('아주 희미한 빛으로도', '정세랑', '일상과 환상이 교차하는 따뜻한 단편 소설집.', 15500, 100);
+INSERT INTO books (title, author, description, price, stock) VALUES ('하얼빈', '김훈', '안중근의 삶과 역사적 순간을 소설로 재해석.', 14800, 100);
+INSERT INTO books (title, author, description, price, stock) VALUES ('도둑맞은 집중력', '요한 하리', '현대인의 집중력 저하 원인과 해결책을 탐구.', 18800, 100);
+INSERT INTO books (title, author, description, price, stock) VALUES ('이기적 유전자', '리처드 도킨스', '진화론의 관점에서 본 인간과 생명의 본질.', 18000, 100);
+INSERT INTO books (title, author, description, price, stock) VALUES ('미드나잇 라이브러리', '매트 헤이그', '인생의 갈림길에서 선택의 의미를 돌아보는 소설.', 15500, 100);
+INSERT INTO books (title, author, description, price, stock) VALUES ('파친코', '이민진', '재일 조선인 가족의 삶을 그린 대하소설.', 16800, 100);
+INSERT INTO books (title, author, description, price, stock) VALUES ('불편한 편의점 2', '김호연', '편의점 사람들의 새로운 이야기와 성장.', 14500, 100);
+INSERT INTO books (title, author, description, price, stock) VALUES ('달러구트 꿈 백화점', '이미예', '꿈을 사고파는 신비한 백화점의 이야기.', 13800, 100);
+INSERT INTO books (title, author, description, price, stock) VALUES ('달러구트 꿈 백화점 2', '이미예', '꿈 백화점의 새로운 에피소드와 손님들.', 13800, 100);
+INSERT INTO books (title, author, description, price, stock) VALUES ('불안', '알랭 드 보통', '불안의 심리를 철학적으로 탐구하는 에세이.', 13800, 100);
+INSERT INTO books (title, author, description, price, stock) VALUES ('아몬드', '손원평', '감정을 느끼지 못하는 소년의 성장 소설.', 13000, 100);
+INSERT INTO books (title, author, description, price, stock) VALUES ('작별인사', '김영하', '인간과 인공지능의 경계에서 고민하는 소설.', 14500, 100);
+INSERT INTO books (title, author, description, price, stock) VALUES ('모순', '양귀자', '가족과 인생의 모순을 그린 한국 장편소설.', 14800, 100);
+INSERT INTO books (title, author, description, price, stock) VALUES ('죽고 싶지만 떡볶이는 먹고 싶어', '백세희', '우울과 일상에 대한 솔직한 에세이.', 13500, 100);
+INSERT INTO books (title, author, description, price, stock) VALUES ('지구 끝의 온실', '김초엽', '미래 지구의 생존과 희망을 그린 SF 소설.', 15300, 100);
+INSERT INTO books (title, author, description, price, stock) VALUES ('불편한 편의점 3', '김호연', '편의점 사람들의 또 다른 성장 이야기.', 15000, 100);
+INSERT INTO books (title, author, description, price, stock) VALUES ('공정하다는 착각', '마이클 샌델', '능력주의와 공정성에 대한 철학적 비판.', 17000, 100);
+INSERT INTO books (title, author, description, price, stock) VALUES ('역사의 쓸모', '최태성', '역사에서 배우는 삶의 지혜.', 16000, 100);
+INSERT INTO books (title, author, description, price, stock) VALUES ('기분을 관리하면 인생이 관리된다', '김다슬', '감정 관리의 중요성과 실천법을 제시.', 14800, 100);
+INSERT INTO books (title, author, description, price, stock) VALUES ('불편한 편의점 4', '김호연', '편의점 시리즈의 마지막 이야기.', 15500, 100);
+INSERT INTO books (title, author, description, price, stock) VALUES ('나는 나로 살기로 했다', '김수현', '자존감 회복과 자기 사랑을 위한 에세이.', 13800, 100);
+INSERT INTO books (title, author, description, price, stock) VALUES ('아침에는 죽음을 생각하는 것이 좋다', '김영민', '삶과 죽음에 대한 철학적 에세이.', 14800, 100);
+INSERT INTO books (title, author, description, price, stock) VALUES ('완전한 행복', '정유정', '행복의 본질을 파헤치는 심리 스릴러.', 15800, 100);
+INSERT INTO books (title, author, description, price, stock) VALUES ('메리골드 마음 세탁소', '윤정은', '마음을 치유하는 세탁소의 따뜻한 이야기.', 14000, 100);
+INSERT INTO books (title, author, description, price, stock) VALUES ('불변의 법칙 2', '모건 하우절', '부의 심리를 더 깊이 탐구하는 후속작.', 18500, 100);
+INSERT INTO books (title, author, description, price, stock) VALUES ('나는 나로 살기로 했다 2', '김수현', '자기 자신을 사랑하는 법을 다시 묻다.', 14000, 100);
+INSERT INTO books (title, author, description, price, stock) VALUES ('오늘 밤, 세계에서 이 사랑이 사라진다 해도', '이치조 미사키', '기억을 잃는 소녀와 소년의 사랑 이야기.', 14800, 100);
+
+COMMIT;
+
+-- 7-1) books 이미지 업데이트
+UPDATE books SET cover_image='https://contents.kyobobook.co.kr/sih/fit-in/200x0/pdt/9788936439743.jpg' WHERE title='혼모노';
+UPDATE books SET cover_image='https://contents.kyobobook.co.kr/sih/fit-in/200x0/pdt/9791161571188.jpg' WHERE title='불편한 편의점';
+UPDATE books SET cover_image='https://contents.kyobobook.co.kr/sih/fit-in/200x0/pdt/9788901272580.jpg' WHERE title='역행자';
+UPDATE books SET cover_image='https://contents.kyobobook.co.kr/sih/fit-in/200x0/pdt/9791168473690.jpg' WHERE title='세이노의 가르침';
+UPDATE books SET cover_image='https://contents.kyobobook.co.kr/sih/fit-in/200x0/pdt/9788959897223.jpg' WHERE title='트렌드 코리아 2025';
+UPDATE books SET cover_image='https://contents.kyobobook.co.kr/sih/fit-in/200x0/pdt/9791198517425.jpg' WHERE title='불변의 법칙';
+UPDATE books SET cover_image='https://contents.kyobobook.co.kr/sih/fit-in/200x0/pdt/9788954695053.jpg' WHERE title='아주 희미한 빛으로도';
+UPDATE books SET cover_image='https://contents.kyobobook.co.kr/sih/fit-in/200x0/pdt/9788954699914.jpg' WHERE title='하얼빈';
+UPDATE books SET cover_image='https://contents.kyobobook.co.kr/sih/fit-in/200x0/pdt/9791167742131.jpg' WHERE title='도둑맞은 집중력';
+UPDATE books SET cover_image='https://contents.kyobobook.co.kr/sih/fit-in/200x0/pdt/9788932473901.jpg' WHERE title='이기적 유전자';
+UPDATE books SET cover_image='https://contents.kyobobook.co.kr/sih/fit-in/200x0/pdt/9791191056556.jpg' WHERE title='미드나잇 라이브러리';
+UPDATE books SET cover_image='https://contents.kyobobook.co.kr/sih/fit-in/200x0/pdt/9791168340510.jpg' WHERE title='파친코';
+UPDATE books SET cover_image='https://contents.kyobobook.co.kr/sih/fit-in/200x0/pdt/9791161571379.jpg' WHERE title='불편한 편의점 2';
+UPDATE books SET cover_image='https://contents.kyobobook.co.kr/sih/fit-in/200x0/pdt/9791165341909.jpg' WHERE title='달러구트 꿈 백화점';
+UPDATE books SET cover_image='https://contents.kyobobook.co.kr/sih/fit-in/200x0/pdt/9791165343729.jpg' WHERE title='달러구트 꿈 백화점 2';
+UPDATE books SET cover_image='https://contents.kyobobook.co.kr/sih/fit-in/200x0/pdt/9788956605593.jpg' WHERE title='불안';
+UPDATE books SET cover_image='https://contents.kyobobook.co.kr/sih/fit-in/200x0/pdt/9791198363503.jpg' WHERE title='아몬드';
+UPDATE books SET cover_image='https://contents.kyobobook.co.kr/sih/fit-in/200x0/pdt/9791191114225.jpg' WHERE title='작별인사';
+UPDATE books SET cover_image='https://contents.kyobobook.co.kr/sih/fit-in/200x0/pdt/9788998441012.jpg' WHERE title='모순';
+UPDATE books SET cover_image='https://contents.kyobobook.co.kr/sih/fit-in/200x0/pdt/9791196394509.jpg' WHERE title='죽고 싶지만 떡볶이는 먹고 싶어';
+UPDATE books SET cover_image='https://contents.kyobobook.co.kr/sih/fit-in/200x0/pdt/9791191824001.jpg' WHERE title='지구 끝의 온실';
+UPDATE books SET cover_image='https://contents.kyobobook.co.kr/sih/fit-in/200x0/pdt/9791161571331.jpg' WHERE title='불편한 편의점 3';
+UPDATE books SET cover_image='https://contents.kyobobook.co.kr/sih/fit-in/200x0/pdt/9791164136452.jpg' WHERE title='공정하다는 착각';
+UPDATE books SET cover_image='https://contents.kyobobook.co.kr/sih/fit-in/200x0/pdt/9791193401200.jpg' WHERE title='역사의 쓸모';
+UPDATE books SET cover_image='https://contents.kyobobook.co.kr/sih/fit-in/200x0/pdt/9791196617127.jpg' WHERE title='기분을 관리하면 인생이 관리된다';
+UPDATE books SET cover_image='https://contents.kyobobook.co.kr/sih/fit-in/200x0/pdt/7070024000208.jpg' WHERE title='불편한 편의점 4';
+UPDATE books SET cover_image='https://contents.kyobobook.co.kr/sih/fit-in/200x0/pdt/9791197377150.jpg' WHERE title='나는 나로 살기로 했다';
+UPDATE books SET cover_image='https://contents.kyobobook.co.kr/sih/fit-in/200x0/pdt/9791167741165.jpg' WHERE title='아침에는 죽음을 생각하는 것이 좋다';
+UPDATE books SET cover_image='https://contents.kyobobook.co.kr/sih/fit-in/200x0/pdt/9791167370280.jpg' WHERE title='완전한 행복';
+UPDATE books SET cover_image='https://contents.kyobobook.co.kr/sih/fit-in/200x0/pdt/9791193937310.jpg' WHERE title='메리골드 마음 세탁소';
+UPDATE books SET cover_image='https://contents.kyobobook.co.kr/sih/fit-in/200x0/pdt/S000213356402.jpg' WHERE title='불변의 법칙 2';
+UPDATE books SET cover_image='https://contents.kyobobook.co.kr/sih/fit-in/200x0/pdt/9791187119845.jpg' WHERE title='나는 나로 살기로 했다 2';
+UPDATE books SET cover_image='https://contents.kyobobook.co.kr/sih/fit-in/458x0/pdt/9791191043297.jpg' WHERE title='오늘 밤, 세계에서 이 사랑이 사라진다 해도';
+
+COMMIT;
+
+-- 7-2) INSERT ALL (추가 배치)
+INSERT ALL
+  INTO books (title, author, description, price, stock) VALUES ('세상의 마지막 기차역(리커버 에디션)', '무라세 다케시 · 모모', '사랑하는 사람을 다시 만날 수 있는 유령 기차를 소재로 한 가슴 따뜻한 휴먼 판타지 소설.', 15120, 100)
+  INTO books (title, author, description, price, stock) VALUES ('희랍어 시간', '한강', '말을 잃어가는 여자와 눈을 잃어가는 남자가 서로의 세계를 이해하며 나누는 이야기.', 11700, 100)
+  INTO books (title, author, description, price, stock) VALUES ('침묵의 퍼레이드', '히가시노 게이고', '법이 지키지 못하는 정의를 위해 침묵하는 사람들의 진실과 반전을 그린 미스터리.', 19620, 100)
+  INTO books (title, author, description, price, stock) VALUES ('인간 실격(초판본)(1948년 오리지널 초판본 표지디자인)', '다자이 오사무', '인간 사회와 자신을 이해하지 못하는 청년의 파멸과 자아 고백을 그린 자전적 소설.', 2700, 100)
+  INTO books (title, author, description, price, stock) VALUES ('동물 농장(초판본)(1945년 오리지널 초판본 표지 디자인)', '조지 오웰', '권력욕과 이념 변질을 풍자한 정치 우화 소설.', 2700, 100)
+  INTO books (title, author, description, price, stock) VALUES ('스토너(초판본)', '존 윌리엄스', '한 남자의 조용하고 묵묵한 삶을 그린 미국 문학의 숨은 명작.', 16200, 100)
+  INTO books (title, author, description, price, stock) VALUES ('죄와 벌 1', '도스토예프스키', '살인과 속죄를 주제로 한 러시아 문학의 고전.', 9900, 100)
+  INTO books (title, author, description, price, stock) VALUES ('날씨가 좋으면 찾아가겠어요', '이도우', '시골 마을 독립서점에서 만난 두 인물의 따뜻한 겨울 이야기.', 15300, 100)
+  INTO books (title, author, description, price, stock) VALUES ('치유의 빛', '강화길', '여성 고딕소설의 정점에서 공동체와 관계의 어두운 단면을 그린 작품.', 16200, 100)
+  INTO books (title, author, description, price, stock) VALUES ('1984(초판본)(1949년 오리지널 초판본 표지디자인)', '조지 오웰', '전체주의와 감시 사회를 비판한 디스토피아 소설.', 3590, 100)
+  INTO books (title, author, description, price, stock) VALUES ('밝은 밤', '최은영', '증조모에서 나에 이르는 4대 여성의 삶을 그린 서사.', 13950, 100)
+  INTO books (title, author, description, price, stock) VALUES ('아가미', '구병모', '죽음의 문턱에서 아가미를 갖게 된 소년의 이야기.', 13320, 100)
+  INTO books (title, author, description, price, stock) VALUES ('집착', '아니 에르노', '개인과 사회의 관계를 예리하게 관찰한 프랑스 작가의 작품.', 9900, 100)
+  INTO books (title, author, description, price, stock) VALUES ('회색 인간', '김동식', '참혹한 현실 속 인간 내면의 빛과 어둠을 단편집으로 풀어낸 작품.', 11700, 100)
+  INTO books (title, author, description, price, stock) VALUES ('파리대왕', '윌리엄 골딩', '문명과 야만의 경계를 무인도 소년들의 이야기로 그린 노벨문학상 수상작.', 7200, 100)
+  INTO books (title, author, description, price, stock) VALUES ('가시고기', '조창인', '아들을 위해 모든 것을 희생하는 아버지의 사랑 이야기.', 15300, 100)
+  INTO books (title, author, description, price, stock) VALUES ('삼체 1: 삼체문제', '류츠신', '외계 문명과 인류의 첫 접촉을 다룬 중국 SF 대작.', 15300, 100)
+  INTO books (title, author, description, price, stock) VALUES ('바다가 들리는 편의점 4', '마치다 소노코', '바다 옆 편의점에서 벌어지는 유쾌하고 따뜻한 이야기.', 15120, 100)
+  INTO books (title, author, description, price, stock) VALUES ('해리 포터와 마법사의 돌 1', 'J.K. 롤링', '소년 마법사 해리 포터의 호그와트 입학과 첫 모험.', 11250, 100)
+  INTO books (title, author, description, price, stock) VALUES ('이끼숲', '천선란', '누군가를 구하는 이야기를 담은 따뜻하고 서정적인 한국 SF.', 14220, 100)
+SELECT 1 FROM DUAL;
+
+-- 7-3) 추가 표지 이미지 (발췌)
+UPDATE books SET cover_image='https://contents.kyobobook.co.kr/sih/fit-in/300x0/pdt/9791191043754.jpg'
+ WHERE title='세상의 마지막 기차역(리커버 에디션)' AND author='무라세 다케시 · 모모';
+UPDATE books SET cover_image='https://contents.kyobobook.co.kr/sih/fit-in/300x0/pdt/9788954616515.jpg'
+ WHERE title='희랍어 시간' AND author='한강';
+UPDATE books SET cover_image='https://contents.kyobobook.co.kr/sih/fit-in/300x0/pdt/9791192483238.jpg'
+ WHERE title='침묵의 퍼레이드' AND author='히가시노 게이고';
+UPDATE books SET cover_image='https://contents.kyobobook.co.kr/sih/fit-in/300x0/pdt/9791164455263.jpg'
+ WHERE title='인간 실격(초판본)(1948년 오리지널 초판본 표지디자인)' AND author='다자이 오사무';
+UPDATE books SET cover_image='https://contents.kyobobook.co.kr/sih/fit-in/300x0/pdt/9791164453122.jpg'
+ WHERE title='동물 농장(초판본)(1945년 오리지널 초판본 표지 디자인)' AND author='조지 오웰';
+UPDATE books SET cover_image='https://contents.kyobobook.co.kr/sih/fit-in/300x0/pdt/9788925538297.jpg'
+ WHERE title='스토너(초판본)' AND author='존 윌리엄스';
+UPDATE books SET cover_image='https://contents.kyobobook.co.kr/sih/fit-in/300x0/pdt/9788937462849.jpg'
+ WHERE title='죄와 벌 1' AND author='도스토예프스키';
+UPDATE books SET cover_image='https://contents.kyobobook.co.kr/sih/fit-in/300x0/pdt/9791197671739.jpg'
+ WHERE title='날씨가 좋으면 찾아가겠어요' AND author='이도우';
+UPDATE books SET cover_image='https://contents.kyobobook.co.kr/sih/fit-in/300x0/pdt/9791167375629.jpg'
+ WHERE title='치유의 빛' AND author='강화길';
+UPDATE books SET cover_image='https://contents.kyobobook.co.kr/sih/fit-in/300x0/pdt/9791194591573.jpg'
+ WHERE title='1984(초판본)(1949년 오리지널 초판본 표지디자인)' AND author='조지 오웰';
+UPDATE books SET cover_image='https://contents.kyobobook.co.kr/sih/fit-in/300x0/pdt/9788954681179.jpg'
+ WHERE title='밝은 밤' AND author='최은영';
+UPDATE books SET cover_image='https://contents.kyobobook.co.kr/sih/fit-in/300x0/pdt/9791162203392.jpg'
+ WHERE title='아가미' AND author='구병모';
+UPDATE books SET cover_image='https://contents.kyobobook.co.kr/sih/fit-in/300x0/pdt/9788954685603.jpg'
+ WHERE title='집착' AND author='아니 에르노';
+UPDATE books SET cover_image='https://contents.kyobobook.co.kr/sih/fit-in/300x0/pdt/9791196222628.jpg'
+ WHERE title='회색 인간' AND author='김동식';
+UPDATE books SET cover_image='https://contents.kyobobook.co.kr/sih/fit-in/300x0/pdt/9788931024036.jpg'
+ WHERE title='파리대왕' AND author='윌리엄 골딩';
+UPDATE books SET cover_image='https://contents.kyobobook.co.kr/sih/fit-in/300x0/pdt/9791191714425.jpg'
+ WHERE title='가시고기' AND author='조창인';
+UPDATE books SET cover_image='https://contents.kyobobook.co.kr/sih/fit-in/300x0/pdt/9788954442695.jpg'
+ WHERE title='삼체 1: 삼체문제' AND author='류츠신';
+UPDATE books SET cover_image='https://contents.kyobobook.co.kr/sih/fit-in/300x0/pdt/9791194930471.jpg'
+ WHERE title='바다가 들리는 편의점 4' AND author='마치다 소노코';
+UPDATE books SET cover_image='https://contents.kyobobook.co.kr/sih/fit-in/300x0/pdt/9791193790403.jpg'
+ WHERE title='해리 포터와 마법사의 돌 1' AND author='J.K. 롤링';
+UPDATE books SET cover_image='https://contents.kyobobook.co.kr/sih/fit-in/300x0/pdt/9791191824216.jpg'
+ WHERE title='이끼숲' AND author='천선란';
+
+-- 7-4) 추가 단건들
+INSERT INTO books (title, author, description, price, stock, cover_image)
+VALUES ('소공녀', '프랜시스 호지슨 버넷', '사라와 베키의 연민과 우정에 대한 고전.', 10620, 100, 'https://contents.kyobobook.co.kr/sih/fit-in/300x0/pdt/9791194440109.jpg');
+
+INSERT INTO books (title, author, description, price, stock, cover_image)
+VALUES ('도금시대', '마크 트웨인 외', '번영의 이면에 감춘 부패를 풍자한 시대극.', 19800, 100, 'https://contents.kyobobook.co.kr/sih/fit-in/300x0/pdt/9791199061750.jpg');
+
+INSERT INTO books (title, author, description, price, stock, cover_image)
+VALUES ('휠 오브 타임 시리즈 13권 세트', '로버트 조던', '현대 판타지 대작 13권 마스터 에디션 세트.', 148500, 100, 'https://contents.kyobobook.co.kr/sih/fit-in/300x0/pdt/9791173573651.jpg');
+
+INSERT INTO books (title, author, description, price, stock, cover_image)
+VALUES ('드래건의 환생', '로버트 조던', '드래건의 환생과 칼란도어를 둘러싼 서사.', 49500, 100, 'https://contents.kyobobook.co.kr/sih/fit-in/300x0/pdt/9791173573682.jpg');
+
+INSERT INTO books (title, author, description, price, stock, cover_image)
+VALUES ('위대한 뿔나팔 사냥대', '로버트 조던', '전설의 뿔나팔을 둘러싼 추격과 전쟁의 전조.', 49500, 100, 'https://contents.kyobobook.co.kr/sih/fit-in/300x0/pdt/9791173573675.jpg');
+
+INSERT INTO books (title, author, description, price, stock, cover_image)
+VALUES ('세계의 눈', '로버트 조던', '예언과 운명으로 시작되는 거대한 여정.', 49500, 100, 'https://contents.kyobobook.co.kr/sih/fit-in/300x0/pdt/9791173573668.jpg');
+
+INSERT INTO books (title, author, description, price, stock, cover_image)
+VALUES ('휴먼', '매트 헤이그', '인간성에 대한 질문을 던지는 힐링 판타지.', 16200, 100, 'https://contents.kyobobook.co.kr/sih/fit-in/300x0/pdt/9791168343115.jpg');
+
+INSERT INTO books (title, author, description, price, stock, cover_image)
+VALUES ('셜리 1, 2 세트', '샬럿 브론테', '우정과 사랑, 자립을 다룬 두 여성의 이야기 세트.', 30600, 100, 'https://contents.kyobobook.co.kr/sih/fit-in/300x0/pdt/9791138396820.jpg');
+
+INSERT INTO books (title, author, description, price, stock, cover_image)
+VALUES ('셜리 1', '샬럿 브론테', '주체적으로 살고자 한 두 여성의 이야기(1권).', 16200, 100, 'https://contents.kyobobook.co.kr/sih/fit-in/300x0/pdt/9791160871449.jpg');
+
+INSERT INTO books (title, author, description, price, stock, cover_image)
+VALUES ('셜리 2', '샬럿 브론테', '주체적으로 살고자 한 두 여성의 이야기(2권).', 16200, 100, 'https://contents.kyobobook.co.kr/sih/fit-in/300x0/pdt/9791138396844.jpg');
+
+INSERT INTO books (title, author, description, price, stock, cover_image)
+VALUES ('블루 아워', '폴라 호킨스', '인간 본성을 집요히 탐구한 심리스릴러.', 16650, 100, 'https://contents.kyobobook.co.kr/sih/fit-in/300x0/pdt/9791138396837.jpg');
+
+INSERT INTO books (title, author, description, price, stock, cover_image)
+VALUES ('블랙 서머', 'M. W. 크레이븐', '워싱턴 포 시리즈의 강렬한 스릴러.', 18000, 100, 'https://contents.kyobobook.co.kr/sih/fit-in/300x0/pdt/9791141612351.jpg');
+
+INSERT INTO books (title, author, description, price, stock, cover_image)
+VALUES ('고종 황제의 고양이', '로버트 W. 리치', '을사늑약 전후 조선을 배경으로 한 첩보 소설.', 15120, 100, 'https://contents.kyobobook.co.kr/sih/fit-in/300x0/pdt/9791199333307.jpg');
+
+INSERT INTO books (title, author, description, price, stock, cover_image)
+VALUES ('꽃과뼈', '줄리아 히벌린', '생존자 테사의 미스터리를 좇는 스릴러.', 15120, 100, 'https://contents.kyobobook.co.kr/sih/fit-in/300x0/pdt/9791160274929.jpg');
+
+INSERT INTO books (title, author, description, price, stock, cover_image)
+VALUES ('피난처', '이디스 워튼', '사랑과 도덕적 딜레마를 다룬 초기작.', 10800, 100, 'https://contents.kyobobook.co.kr/sih/fit-in/300x0/pdt/9788931025576.jpg');
+
+INSERT INTO books (title, author, description, price, stock, cover_image)
+VALUES ('버지니아 울프 단편선', '버지니아 울프 외', '의식의 흐름과 서사 실험의 정수를 담은 단편선.', 13500, 100, 'https://contents.kyobobook.co.kr/sih/fit-in/300x0/pdt/9788937464706.jpg');
+
+INSERT INTO books (title, author, description, price, stock, cover_image)
+VALUES ('오즈의 마법사 1(미니미니북)(초판본)', '라이먼 프랭크 바움', '도로시의 모험을 담은 클래식.', 3510, 100, 'https://contents.kyobobook.co.kr/sih/fit-in/300x0/pdt/9791194928744.jpg');
+
+COMMIT;
+
