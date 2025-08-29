@@ -115,23 +115,25 @@
   <div class="card">
     <div class="section-title">결제</div>
 
-    <form id="payForm" method="post" action="<c:url value='/bookstore/checkout/pay'/>">
-      <!-- CSRF -->
-      <c:if test="${not empty _csrf}">
-        <input type="hidden" name="${_csrf.parameterName}" value="${_csrf.token}"/>
-      </c:if>
+<form id="payForm" method="post" action="<c:url value='/bookstore/checkout/pay'/>">
+  <!-- CSRF -->
+  <c:if test="${not empty _csrf}">
+    <input type="hidden" name="${_csrf.parameterName}" value="${_csrf.token}"/>
+  </c:if>
 
-      <!-- 필수 파라미터: 컨트롤러와 매칭 -->
-      <input type="hidden" name="orderId"  value="${order.orderId}"/>
-      <input type="hidden" name="payToken" value="${payToken}"/>
+  <!-- 필수 파라미터: 컨트롤러와 매칭 -->
+  <input type="hidden" name="orderId"  value="${order.orderId}"/>
+  <input type="hidden" name="payToken" value="${payToken}"/>
 
+  <!-- ✅ 추가 -->
+  <input type="hidden" name="method" value="card"/>
 
-      <div class="row">
-        <span class="total"><fmt:formatNumber value="${order.totalAmount}" type="number"/>원</span>
-      </div>
+  <div class="row">
+    <span class="total"><fmt:formatNumber value="${order.totalAmount}" type="number"/>원</span>
+  </div>
 
-      <button id="payBtn" type="submit" class="btn btn-primary">결제하기</button>
-    </form>
+  <button id="payBtn" type="submit" class="btn btn-primary">결제하기</button>
+</form>
 
     <c:if test="${not empty payToken}">
       <p class="muted" style="margin-top:12px;"></p>

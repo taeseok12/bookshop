@@ -1,0 +1,189 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<!DOCTYPE mapper
+  PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+  "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+
+<mapper namespace="mapper.OrderMapper">
+
+  <!-- =========================
+       결과 매핑
+  ========================== -->
+  <!-- 주문 요약 (목록) -->
+  <resultMap id="OrderSummaryMap" type="model.OrderSummary">
+    <id     property="orderId"       column="order_id"/>
+    <result property="userId"        column="user_id"/>
+    <result property="orderDate"     column="order_date"/>
+    <result property="status"        column="status"/>
+    <result property="totalAmount"   column="total_amount"/>
+    <result property="receiverName"  column="receiver_name"/>
+    <result property="firstBookTitle" column="first_book_title"/>
+    <result property="firstBookCover" column="first_book_cover"/>
+    <result property="totalBookCount" column="total_book_count"/>
+  </resultMap>
+
+  <!-- 주문 헤더 (상세) -->
+  <resultMap id="OrderHeaderMap" type="model.OrderHeader">
+    <id     property="orderId"     column="order_id"/>
+    <result property="userId"      column="user_id"/>
+    <result property="orderDate"   column="order_date"/>
+    <result property="status"      column="status"/>
+    <result property="totalAmount" column="total_amount"/>
+    <result property="address"     column="address"/>
+    <result property="postcode"    column="postcode"/>
+    <result property="trackingNo"  column="tracking_no"/>
+    <result property="courier"     column="courier"/>
+    <result property="shippedAt"   column="shipped_at"/>
+    <result property="deliveredAt" column="delivered_at"/>
+    <result property="cancelledAt" column="cancelled_at"/>
+  </resultMap>
+
+  <!-- =========================
+       조회 (마이페이지 용)
+  ========================== -->
+  <!-- 사용자 주문 목록 조회 (receiver_name 포함) -->
+  <select id="selectOrdersByUser" resultType="model.OrderSummary">
+    <![CDATA[
+    SELECT
+      o.order_id,
+      o.user_id,
+      o.order_date,
+      o.status,
+      o.total_amount,
+      u.name AS receiver_name,
+      ( SELECT b.title
+          FROM order_items oi
+          JOIN books b ON oi.book_id = b.book_id
+         WHERE oi.order_id = o.order_id
+         ORDER BY oi.order_item_id ASC
+         FETCH FIRST 1 ROWS ONLY
+      ) AS first_book_title,
+      ( SELECT b.cover_image
+          FROM order_items oi
+          JOIN books b ON oi.book_id = b.book_id
+         WHERE oi.order_id = o.order_id
+         ORDER BY oi.order_item_id ASC
+         FETCH FIRST 1 ROWS ONLY
+      ) AS first_book_cover,
+      ( SELECT SUM(oi.quantity)
+          FROM order_items oi
+         WHERE oi.order_id = o.order_id
+      ) AS total_book_count
+    FROM orders o
+    JOIN users u ON u.user_id = o.user_id
+    WHERE o.user_id = #{userId}
+      AND o.status <> 'PENDING'     -- 필요 시 제거
+    ORDER BY o.order_date DESC
+    OFFSET #{offset} ROWS FETCH NEXT #{limit} ROWS ONLY
+    ]]>
+  </select>
+
+  <!-- 사용자 주문 개수 (페이징) -->
+  <select id="countOrdersByUser" resultType="int">
+    <![CDATA[
+    SELECT COUNT(*)
+      FROM orders
+     WHERE user_id = #{userId, jdbcType=NUMERIC}
+       AND status <> 'PENDING'      -- 필요 시 제거
+    ]]>
+  </select>
+
+  <!-- 주문 헤더 단건 조회 -->
+  <select id="selectOrderHeader" resultMap="OrderHeaderMap">
+    <![CDATA[
+    SELECT
+      o.order_id,
+      o.user_id,
+      o.order_date,
+      o.status,
+      o.total_amount,
+      o.address,
+      o.postcode,
+      o.tracking_no,
+      o.courier,
+      o.shipped_at,
+      o.delivered_at,
+      o.cancelled_at
+    FROM orders o
+    WHERE o.order_id = #{orderId, jdbcType=NUMERIC}
+      AND o.user_id  = #{userId,  jdbcType=NUMERIC}
+    ]]>
+  </select>
+
+  <!-- =========================
+       생성(체크아웃) / 항목 / 보조
+  ========================== -->
+  <!-- 주문 생성
+       - 트리거(trg_orders_bi)로 order_id 자동 채번
+       - 상태 기본값 PENDING(DDL DEFAULT)이나 명시 파라미터 있으면 사용 -->
+  <insert id="insertOrder" parameterType="map">
+    INSERT INTO orders
+      (user_id, status, total_amount, address, postcode, order_date, courier, tracking_no)
+    VALUES
+      (#{userId}, NVL(#{status}, 'PENDING'), #{totalAmount}, #{address}, #{postcode}, SYSDATE,
+       #{courier}, #{trackingNo})
+  </insert>
+
+  <!-- 방금 insert한 주문의 order_id 얻기
+       - 같은 세션에서만 유효 -->
+  <select id="selectCurrOrderId" resultType="long">
+    SELECT seq_orders.CURRVAL FROM dual
+  </select>
+
+  <!-- 주문항목 생성
+       - trg_order_items_bi로 order_item_id 자동 채번 -->
+  <insert id="insertOrderItem" parameterType="map">
+    INSERT INTO order_items (order_id, book_id, quantity, unit_price)
+    VALUES (#{orderId}, #{bookId}, #{quantity}, #{unitPrice})
+  </insert>
+
+  <!-- =========================
+       상태/송장 업데이트 (사용자/관리자 공용으로 활용 가능)
+  ========================== -->
+  <!-- 주문 상태 변경 -->
+  <update id="updateOrderStatus">
+    UPDATE orders
+       SET status = #{status},
+           shipped_at   = CASE WHEN #{status} = 'SHIPPED'   THEN SYSDATE ELSE shipped_at   END,
+           delivered_at = CASE WHEN #{status} = 'DELIVERED' THEN SYSDATE ELSE delivered_at END,
+           cancelled_at = CASE WHEN #{status} = 'CANCELLED' THEN SYSDATE ELSE cancelled_at END
+     WHERE order_id = #{orderId}
+  </update>
+
+  <!-- 송장/택배사 업데이트(선택 필드만 세팅) -->
+  <update id="updateOrderCourier">
+    UPDATE orders
+       SET courier     = COALESCE(#{courier}, courier),
+           tracking_no = COALESCE(#{trackingNo}, tracking_no)
+     WHERE order_id    = #{orderId}
+  </update>
+  
+  <!-- 주문 단건(본인 것만) 조회: Map 키는 "status","totalAmount" 등으로 alias 고정 -->
+<select id="findOrderForUser" resultType="map">
+  SELECT
+    o.order_id     AS "orderId",
+    o.user_id      AS "userId",
+    o.status       AS "status",
+    o.total_amount AS "totalAmount",
+    o.address      AS "address",
+    o.postcode     AS "postcode",
+    o.order_date   AS "orderDate"
+  FROM orders o
+  WHERE o.order_id = #{orderId}
+    AND o.user_id  = #{userId}
+</select>
+
+<!-- 주문항목 조회 -->
+<select id="findOrderItemsByOrderId" resultType="map">
+  SELECT
+    oi.order_item_id AS "orderItemId",
+    oi.order_id      AS "orderId",
+    oi.book_id       AS "bookId",
+    oi.quantity      AS "quantity",
+    oi.unit_price    AS "unitPrice"
+  FROM order_items oi
+  WHERE oi.order_id = #{orderId}
+  ORDER BY oi.order_item_id
+</select>
+  
+
+</mapper>

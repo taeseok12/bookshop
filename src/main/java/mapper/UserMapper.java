@@ -14,5 +14,9 @@ public interface UserMapper {
     int insertUser(User user);
     List<String> findRolesByUserId(@Param("userId") Long userId);
     Long findUserIdByLoginId(@Param("loginId") String loginId);
+    User findByUserId(@Param("userId") Long userId);
+    int updatePassword(@Param("userId") Long userId, @Param("password") String password);
+    int updateUser(User user);
+    String findPasswordHashByUserId(@Param("userId") Long userId);     // 비번 해시만
 }
  

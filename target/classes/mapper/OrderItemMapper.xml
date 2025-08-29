@@ -1,0 +1,53 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<!DOCTYPE mapper
+  PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+  "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+
+<mapper namespace="mapper.OrderItemMapper">
+
+  <resultMap id="OrderItemViewMap" type="model.OrderItemView">
+    <id     property="orderItemId" column="order_item_id"/>
+    <result property="orderId"     column="order_id"/>
+    <result property="bookId"      column="book_id"/>
+    <result property="bookTitle"   column="book_title"/>
+    <result property="author"      column="author"/>
+    <result property="coverImage"  column="cover_image"/>
+    <result property="unitPrice"   column="unit_price"/>
+    <result property="quantity"    column="quantity"/>
+    <result property="address"  column="address"/>
+	<result property="postcode" column="postcode"/>
+  </resultMap>
+	
+	
+  <!-- 상세용: 본인 주문 권한 체크 + 안정적 정렬 -->
+<!-- 상세용: 본인 주문 권한 체크 + 안정적 정렬 -->
+<select id="selectOrderItems" resultMap="OrderItemViewMap">
+  SELECT
+    oi.order_item_id,
+    oi.order_id,
+    oi.book_id,
+    b.title       AS book_title,
+    b.author      AS author,
+    b.cover_image AS cover_image,
+    oi.unit_price,
+    oi.quantity,
+    o.address     AS address,    -- 추가
+    o.postcode    AS postcode    -- 추가
+  FROM order_items oi
+  JOIN orders o ON o.order_id = oi.order_id
+  JOIN books  b ON b.book_id  = oi.book_id
+  WHERE oi.order_id = #{orderId, jdbcType=NUMERIC}
+    AND o.user_id   = #{userId,  jdbcType=NUMERIC}
+  ORDER BY oi.order_item_id
+</select>
+
+
+  <!-- (옵션) 상품 소계가 필요하면: 할인/배송비와 분리 표기용 -->
+  <select id="calcOrderSubtotal" resultType="long">
+    SELECT NVL(SUM(oi.unit_price * oi.quantity), 0)
+    FROM order_items oi
+    WHERE oi.order_id = #{orderId, jdbcType=NUMERIC}
+  </select>
+  
+
+</mapper>

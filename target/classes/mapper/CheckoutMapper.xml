@@ -81,5 +81,10 @@
      WHERE order_id = #{orderId}
        AND status   = 'PENDING'
   </update>
-
+<select id="findOrdersByUserId" resultType="map">
+  SELECT o.order_id, o.status, o.total_amount, o.created_at
+  FROM orders o
+  WHERE o.user_id = #{userId}
+  ORDER BY o.created_at DESC
+</select>
 </mapper>

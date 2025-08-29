@@ -4,8 +4,10 @@ import java.io.UnsupportedEncodingException;
 import java.math.BigDecimal;
 import java.net.URLDecoder;
 import java.nio.charset.StandardCharsets;
+import java.security.Principal;
 import java.util.*;
 import java.util.stream.Collectors;
+
 import javax.servlet.http.Cookie;
 import javax.servlet.http.HttpServletRequest;
 import javax.servlet.http.HttpServletResponse;
@@ -21,7 +23,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 
 import model.Book;
 import mapper.BookMapper;
-import mapper.CheckoutMapper;
+import mapper.OrderMapper;
 import mapper.UserMapper;
 
 @Controller
@@ -30,23 +32,23 @@ public class CheckoutController {
 
   private final UserMapper userMapper;
   private final BookMapper bookMapper;
-  private final CheckoutMapper checkoutMapper;
+  private final OrderMapper orderMapper;     // ✅ 통합: 주문 관련 Mapper
   private final ObjectMapper om = new ObjectMapper();
 
-  public CheckoutController(UserMapper userMapper, BookMapper bookMapper, CheckoutMapper checkoutMapper) {
+  public CheckoutController(UserMapper userMapper, BookMapper bookMapper, OrderMapper orderMapper) {
     this.userMapper = userMapper;
     this.bookMapper = bookMapper;
-    this.checkoutMapper = checkoutMapper;
+    this.orderMapper = orderMapper;
   }
 
   /** 1) 주소 입력 후 '주문만 생성' (장바구니 or 바로구매 모두 지원) */
   @PostMapping("/checkout/confirm")
   @Transactional
-  public String confirm(java.security.Principal principal,
-                        @RequestParam(value="address",  required=false) String address,
-                        @RequestParam(value="postcode", required=false) String postcode,
-                        @RequestParam(value="buyNowBookId", required=false) Long buyNowBookId, // 바로구매: 도서ID
-                        @RequestParam(value="buyNowQty",    required=false) Integer buyNowQty,  // 바로구매: 수량
+  public String confirm(Principal principal,
+                        @RequestParam(value = "address",  required = false) String address,
+                        @RequestParam(value = "postcode", required = false) String postcode,
+                        @RequestParam(value = "buyNowBookId", required = false) Long buyNowBookId, // 바로구매: 도서ID
+                        @RequestParam(value = "buyNowQty",    required = false) Integer buyNowQty,  // 바로구매: 수량
                         HttpServletRequest req, HttpServletResponse res,
                         RedirectAttributes ra) throws UnsupportedEncodingException {
 
@@ -73,7 +75,7 @@ public class CheckoutController {
     }
 
     // ✅ 주문 대상(wanted) 구성: 바로구매 파라미터가 있으면 그걸 우선 사용
-    Map<Long,Integer> wanted;
+    Map<Long, Integer> wanted;
     if (buyNowBookId != null) {
       int q = (buyNowQty == null ? 1 : Math.max(1, Math.min(99, buyNowQty)));
       wanted = new LinkedHashMap<>();
@@ -89,11 +91,11 @@ public class CheckoutController {
 
     // 도서 조회
     List<Book> rows = bookMapper.findByIdList(new ArrayList<>(wanted.keySet()));
-    Map<Long,Book> bookMap = rows.stream().collect(Collectors.toMap(Book::getBookId, b->b));
+    Map<Long, Book> bookMap = rows.stream().collect(Collectors.toMap(Book::getBookId, b -> b));
 
     // 총액/유효성
     BigDecimal total = BigDecimal.ZERO;
-    for (Map.Entry<Long,Integer> e : wanted.entrySet()) {
+    for (Map.Entry<Long, Integer> e : wanted.entrySet()) {
       Long bookId = e.getKey(); int qty = e.getValue();
       Book b = bookMap.get(bookId);
       if (b == null) { ra.addFlashAttribute("error", "존재하지 않는 도서가 포함되었습니다"); return "redirect:/bookstore/cart"; }
@@ -105,35 +107,30 @@ public class CheckoutController {
     }
 
     // (a) 주문 생성: DB 상태는 PENDING
-    Map<String,Object> order = new HashMap<>();
+    Map<String, Object> order = new HashMap<>();
     order.put("userId", userId);
     order.put("status", "PENDING");
     order.put("totalAmount", total);
     order.put("address", address);
     order.put("postcode", postcode);
-    checkoutMapper.insertOrder(order);
+    orderMapper.insertOrder(order);               // ✅ OrderMapper 사용
 
-    Long orderId = checkoutMapper.selectCurrOrderId();
+    Long orderId = orderMapper.selectCurrOrderId(); // 동일 세션 CURRVAL
     if (orderId == null) {
       ra.addFlashAttribute("error", "주문ID 생성에 실패했습니다");
       return "redirect:/bookstore/cart";
     }
 
     // (b) 주문 항목 스냅샷 저장(단가/수량) — 재고 차감은 아직 X
-    for (Map.Entry<Long,Integer> e : wanted.entrySet()) {
+    for (Map.Entry<Long, Integer> e : wanted.entrySet()) {
       Long bookId = e.getKey(); int qty = e.getValue();
       BigDecimal unitPrice = BigDecimal.valueOf(bookMap.get(bookId).getPrice());
-      Map<String,Object> item = new HashMap<>();
-      item.put("orderId", orderId);
-      item.put("bookId", bookId);
-      item.put("quantity", qty);
-      item.put("unitPrice", unitPrice);
-      checkoutMapper.insertOrderItem(item);
+      orderMapper.insertOrderItem(orderId, bookId, qty, unitPrice);  // ✅ 파라미터 방식
     }
 
     // (c) 결제 중복방지 토큰(세션 저장)
     String token = UUID.randomUUID().toString();
-    req.getSession().setAttribute("PAY_TOKEN_"+orderId, token);
+    req.getSession().setAttribute("PAY_TOKEN_" + orderId, token);
 
     // 결제창으로 이동
     return "redirect:/bookstore/checkout?orderId=" + orderId + "&token=" + token;
@@ -142,8 +139,8 @@ public class CheckoutController {
   /** 2) 결제창 표시(PENDING + 세션 토큰 필수) */
   @GetMapping("/checkout")
   public String checkoutPage(@RequestParam Long orderId,
-                             @RequestParam(required=false) String token,
-                             java.security.Principal principal,
+                             @RequestParam(required = false) String token,
+                             Principal principal,
                              Model model, HttpServletRequest req,
                              HttpServletResponse res,
                              RedirectAttributes ra) {
@@ -159,7 +156,7 @@ public class CheckoutController {
     res.setDateHeader("Expires", 0);
 
     Long userId = userMapper.findUserIdByLoginId(principal.getName());
-    Map<String,Object> order = checkoutMapper.findOrderForUser(orderId, userId);
+    Map<String, Object> order = orderMapper.findOrderForUser(orderId, userId); // ✅
     if (order == null) {
       ra.addFlashAttribute("error", "주문을 찾을 수 없습니다");
       return "redirect:/bookstore/cart";
@@ -183,7 +180,7 @@ public class CheckoutController {
       return "redirect:/bookstore/cart";
     }
 
-    List<Map<String,Object>> items = checkoutMapper.findOrderItemsByOrderId(orderId);
+    List<Map<String, Object>> items = orderMapper.findOrderItemsByOrderId(orderId); // ✅
     model.addAttribute("order", order);
     model.addAttribute("items", items);
     model.addAttribute("payToken", sess);
@@ -196,7 +193,7 @@ public class CheckoutController {
   public String pay(@RequestParam Long orderId,
                     @RequestParam String method,
                     @RequestParam String payToken,
-                    java.security.Principal principal,
+                    Principal principal,
                     HttpServletRequest req, HttpServletResponse res,
                     RedirectAttributes ra) {
 
@@ -206,14 +203,14 @@ public class CheckoutController {
     }
 
     // 토큰(idempotency) 검증
-    String sess = (String) req.getSession().getAttribute("PAY_TOKEN_"+orderId);
+    String sess = (String) req.getSession().getAttribute("PAY_TOKEN_" + orderId);
     if (sess == null || !sess.equals(payToken)) {
       ra.addFlashAttribute("error", "토큰 오류");
-      return "redirect:/bookstore/checkout?orderId="+orderId;
+      return "redirect:/bookstore/checkout?orderId=" + orderId;
     }
 
     Long userId = userMapper.findUserIdByLoginId(principal.getName());
-    Map<String,Object> order = checkoutMapper.findOrderForUser(orderId, userId);
+    Map<String, Object> order = orderMapper.findOrderForUser(orderId, userId); // ✅
     if (order == null) {
       ra.addFlashAttribute("error", "주문이 없습니다");
       return "redirect:/bookstore/cart";
@@ -221,14 +218,14 @@ public class CheckoutController {
 
     String status = String.valueOf(order.get("status"));
     if (!"PENDING".equals(status)) {
-      return "redirect:/bookstore/order/complete?orderId="+orderId; // 이미 처리됨
+      return "redirect:/bookstore/order/complete?orderId=" + orderId; // 이미 처리됨
     }
 
-    List<Map<String,Object>> items = checkoutMapper.findOrderItemsByOrderId(orderId);
+    List<Map<String, Object>> items = orderMapper.findOrderItemsByOrderId(orderId); // ✅
 
     // 서버 재계산 + 재고 최종 점검
     BigDecimal recalculated = BigDecimal.ZERO;
-    for (Map<String,Object> it : items) {
+    for (Map<String, Object> it : items) {
       long bookId = ((Number) it.get("bookId")).longValue();
       int qty = ((Number) it.get("quantity")).intValue();
       BigDecimal unitPrice = (BigDecimal) it.get("unitPrice");
@@ -236,7 +233,7 @@ public class CheckoutController {
       Book b = bookMapper.findBookById(bookId);
       if (b.getStock() == null || b.getStock() < qty) {
         ra.addFlashAttribute("error", "결제 중 품절된 상품이 있습니다");
-        return "redirect:/bookstore/checkout?orderId="+orderId;
+        return "redirect:/bookstore/checkout?orderId=" + orderId;
       }
 
       recalculated = recalculated.add(unitPrice.multiply(BigDecimal.valueOf(qty)));
@@ -244,28 +241,27 @@ public class CheckoutController {
     BigDecimal orderTotal = (BigDecimal) order.get("totalAmount");
     if (recalculated.compareTo(orderTotal) != 0) {
       ra.addFlashAttribute("error", "금액 변경이 감지되었습니다");
-      return "redirect:/bookstore/checkout?orderId="+orderId;
+      return "redirect:/bookstore/checkout?orderId=" + orderId;
     }
 
     // (모의) 결제 승인 → 재고 차감
-    for (Map<String,Object> it : items) {
+    for (Map<String, Object> it : items) {
       long bookId = ((Number) it.get("bookId")).longValue();
       int qty = ((Number) it.get("quantity")).intValue();
       int updated = bookMapper.decreaseStock(bookId, qty);
       if (updated == 0) {
         ra.addFlashAttribute("error", "결제 중 품절되었습니다");
-        return "redirect:/bookstore/checkout?orderId="+orderId;
+        return "redirect:/bookstore/checkout?orderId=" + orderId;
       }
     }
 
-    // 상태 변경: PAID
-    checkoutMapper.updateOrderStatus(orderId, "PAID", method);
-    //req.getSession().setAttribute("PAY_DONE", true);
+    // 상태 변경: PAID  (결제수단 저장 컬럼이 없으므로 method는 로그/추후 확장용)
+    orderMapper.updateOrderStatus(orderId, "PAID"); // ✅ 시그니처 변경
 
     // 장바구니 쿠키 삭제 + 토큰 폐기
     clearCartCookie(res);
     clearCartCookieRoot(res);
-    req.getSession().removeAttribute("PAY_TOKEN_"+orderId);
+    req.getSession().removeAttribute("PAY_TOKEN_" + orderId);
 
     return "redirect:/bookstore/order/complete?orderId=" + orderId;
   }
@@ -318,37 +314,60 @@ public class CheckoutController {
     res.addCookie(cart);
   }
 
+  // 주문 완료 페이지 (결제 후 진입점)
+  @GetMapping("/order/complete")
+  public String orderComplete(@RequestParam("orderId") Long orderId,
+                              Principal principal,
+                              Model model,
+                              RedirectAttributes ra) {
+    if (principal == null) {
+      ra.addFlashAttribute("error", "다시 로그인해주세요");
+      return "redirect:/loginForm";
+    }
+    Long userId = userMapper.findUserIdByLoginId(principal.getName());
+
+    Map<String, Object> order = orderMapper.findOrderForUser(orderId, userId); // ✅
+    if (order == null) {
+      ra.addFlashAttribute("error", "주문을 찾을 수 없습니다");
+      return "redirect:/bookstore/cart";
+    }
+
+    List<Map<String, Object>> items = orderMapper.findOrderItemsByOrderId(orderId); // ✅
+    model.addAttribute("order", order);
+    model.addAttribute("items", items);
+
+    // 파일명이 정확히 orderComplete.jsp 인지 확인!!
+    return "bookstore/orderComplete";
+  }
+
   /** 주소 입력 폼: 장바구니 비어도 '바로구매' 쿼리는 허용 */
   @GetMapping("/checkoutForm")
-  public String checkoutForm(@RequestParam(value="error", required=false) String error,
-                             @RequestParam(value="bookId", required=false) Long bookId,
-                             @RequestParam(value="qty",    required=false) Integer qty,
+  public String checkoutForm(@RequestParam(value = "error", required = false) String error,
+                             @RequestParam(value = "bookId", required = false) Long bookId,
+                             @RequestParam(value = "qty",    required = false) Integer qty,
                              Model model,
                              HttpServletRequest req,
                              HttpServletResponse res,
                              RedirectAttributes ra) {
-      // ✅ 뒤로가기 캐시 방지
-      res.setHeader("Cache-Control", "no-store, no-cache, must-revalidate, max-age=0");
-      res.setHeader("Pragma", "no-cache");
-      res.setDateHeader("Expires", 0);
+    // 뒤로가기 캐시 방지
+    res.setHeader("Cache-Control", "no-store, no-cache, must-revalidate, max-age=0");
+    res.setHeader("Pragma", "no-cache");
+    res.setDateHeader("Expires", 0);
 
-      // ✅ 결제 완료 플래그 있으면 checkoutForm 접근 차단
-      //req.getSession().removeAttribute("PAY_DONE");
+    // 장바구니/바로구매 체크
+    Map<Long, Integer> wanted = readCartCookieToWantedMap(req);
+    if (wanted.isEmpty() && bookId == null) {
+      ra.addFlashAttribute("error", "장바구니가 비어있습니다");
+      return "redirect:/bookstore/cart";
+    }
 
-      // ✅ 장바구니/바로구매 체크
-      Map<Long,Integer> wanted = readCartCookieToWantedMap(req);
-      if (wanted.isEmpty() && bookId == null) {
-          ra.addFlashAttribute("error", "장바구니가 비어있습니다");
-          return "redirect:/bookstore/cart";
-      }
+    // 바로구매 값 모델에 담기
+    if (bookId != null) {
+      model.addAttribute("buyNowBookId", bookId);
+      model.addAttribute("buyNowQty", (qty == null ? 1 : Math.max(1, Math.min(99, qty))));
+    }
 
-      // ✅ 바로구매 값 모델에 담기
-      if (bookId != null) {
-          model.addAttribute("buyNowBookId", bookId);
-          model.addAttribute("buyNowQty", (qty == null ? 1 : Math.max(1, Math.min(99, qty))));
-      }
-
-      model.addAttribute("error", error);
-      return "bookstore/checkoutForm";
+    model.addAttribute("error", error);
+    return "bookstore/checkoutForm";
   }
 }

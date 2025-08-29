@@ -15,10 +15,9 @@
 </head>
 <body>
   <div class="wrap">
-    <h1>주문이 완료되었습니다 🎉</h1>
-    <p>구매해 주셔서 감사합니다. 주문 내역은 ‘내 주문’에서 확인할 수 있어요.</p>
+    <h1>주문 완료</h1>
     <div class="actions">
-      <a class="btn" href="${pageContext.request.contextPath}/bookstore/books">계속 쇼핑하기</a>
+      <a class="btn" href="${pageContext.request.contextPath}/bookstore/books">메인 화면</a>
     </div>
   </div>
 

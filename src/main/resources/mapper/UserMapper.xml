@@ -33,7 +33,25 @@
     FROM users
     WHERE login_id = #{loginId}
   </select>
-
+  
+  <select id="findByUserId" parameterType="long" resultType="model.User">
+  SELECT user_id, login_id, name, email, hp, role
+  FROM users
+  WHERE user_id = #{userId}
+</select>
+  
+  <update id="updateUser" parameterType="model.User">
+  UPDATE users
+  SET name = #{name},
+      email = #{email},
+      hp = #{hp}
+  WHERE user_id = #{userId}
+</update>
+	<!-- 비밀번호 해시만 조회 -->
+  <select id="findPasswordHashByUserId" parameterType="long" resultType="string">
+    SELECT password FROM users WHERE user_id = #{userId}
+  </select>
+	
   <!-- (선택) 사용자 권한 조회 -->
   <select id="findRolesByUserId" resultType="string" parameterType="long">
     SELECT role
@@ -47,4 +65,10 @@
 <select id="findUserIdByLoginId" parameterType="string" resultType="long">
   SELECT user_id FROM users WHERE login_id = #{loginId}
 </select>
+<!-- passwordupdate -->
+<update id="updatePassword">
+  UPDATE users
+  SET password = #{password}
+  WHERE user_id = #{userId}
+</update>
 </mapper>

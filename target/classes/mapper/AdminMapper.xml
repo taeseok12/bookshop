@@ -1,0 +1,241 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper
+  PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+  "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+
+<mapper namespace="mapper.AdminMapper">
+
+  <!-- ===== 대시보드 ===== -->
+  <select id="selectUserCount" resultType="int">
+    SELECT COUNT(*) FROM users
+  </select>
+
+  <select id="selectOrderCount" resultType="int">
+    SELECT COUNT(*) FROM orders
+  </select>
+
+  <!-- 총 매출: 결제완료/배송중/배송완료만 합산 -->
+  <select id="selectTotalSales" resultType="long">
+    SELECT NVL(SUM(total_amount), 0)
+      FROM orders
+     WHERE status IN ('PAID','SHIPPED','DELIVERED')
+  </select>
+
+  <!-- 베스트셀러 TOP 5 (수량 기준) -->
+  <resultMap id="TopBookMap" type="model.DashboardStats$TopBook">
+    <result column="book_id" property="bookId"/>
+    <result column="title" property="title"/>
+    <result column="author" property="author"/>
+    <result column="total_qty" property="totalQty"/>
+  </resultMap>
+
+  <select id="selectBestsellersTop5" resultMap="TopBookMap">
+    SELECT b.book_id,
+           b.title,
+           b.author,
+           SUM(oi.quantity) AS total_qty
+      FROM order_items oi
+      JOIN books b ON b.book_id = oi.book_id
+      JOIN orders o ON o.order_id = oi.order_id
+     WHERE o.status IN ('PAID','SHIPPED','DELIVERED')
+     GROUP BY b.book_id, b.title, b.author
+     ORDER BY SUM(oi.quantity) DESC
+     FETCH FIRST 5 ROWS ONLY
+  </select>
+
+  <!-- ===== 사용자 검색/권한/활성 ===== -->
+  <select id="findUsers" resultType="map">
+    SELECT
+      u.user_id  AS "userId",
+      u.login_id AS "loginId",
+      u.name     AS "name",
+      u.email    AS "email",
+      u.hp       AS "hp",
+      u.role     AS "role",
+      u.active   AS "active"
+    FROM users u
+    WHERE 1=1
+      <if test="keyword != null and keyword != ''">
+        AND (LOWER(u.login_id) LIKE LOWER('%' || #{keyword} || '%')
+          OR LOWER(u.name)     LIKE LOWER('%' || #{keyword} || '%')
+          OR LOWER(u.email)    LIKE LOWER('%' || #{keyword} || '%'))
+      </if>
+      <if test="role != null and role != ''">
+        AND u.role = #{role}
+      </if>
+    ORDER BY u.user_id DESC
+  </select>
+
+  <update id="updateUserRole">
+    UPDATE users
+       SET role = #{role}
+     WHERE user_id = #{userId}
+  </update>
+
+  <update id="updateUserActive">
+    UPDATE users
+       SET active = #{active}
+     WHERE user_id = #{userId}
+  </update>
+
+  <!-- ===== 도서 조회/CRUD ===== -->
+
+  <!-- 도서 목록 (CLOB -> String, alias 따옴표로 고정) -->
+  <select id="findBooks" resultType="map">
+    SELECT
+      b.book_id     AS "bookId",
+      b.title       AS "title",
+      b.author      AS "author",
+      TO_CHAR(b.description) AS "description",
+      b.price       AS "price",
+      b.stock       AS "stock",
+      b.cover_image AS "coverImage"
+    FROM books b
+    WHERE 1=1
+      <if test="keyword != null and keyword != ''">
+        AND (LOWER(b.title)  LIKE LOWER('%' || #{keyword} || '%')
+         OR  LOWER(b.author) LIKE LOWER('%' || #{keyword} || '%'))
+      </if>
+    ORDER BY b.book_id DESC
+  </select>
+
+  <!-- 도서 단건 조회 (수정폼용) -->
+  <select id="selectBookById" resultType="map">
+    SELECT
+      b.book_id     AS "bookId",
+      b.title       AS "title",
+      b.author      AS "author",
+      TO_CHAR(b.description) AS "description",
+      b.price       AS "price",
+      b.stock       AS "stock",
+      b.cover_image AS "coverImage"
+    FROM books b
+    WHERE b.book_id = #{bookId}
+  </select>
+
+  <!-- 등록 -->
+  <insert id="insertBook">
+    INSERT INTO books
+      (book_id, title, author, description, price, stock, cover_image)
+    VALUES
+      (seq_books.NEXTVAL,
+       #{title}, #{author}, #{description}, #{price}, #{stock}, #{cover_image})
+  </insert>
+
+  <!-- 수정: 들어온 컬럼만 갱신 -->
+  <update id="updateBook">
+    UPDATE books
+       SET title       = COALESCE(#{title}, title),
+           author      = COALESCE(#{author}, author),
+           description = COALESCE(#{description}, description),
+           price       = COALESCE(#{price}, price),
+           stock       = COALESCE(#{stock}, stock),
+           cover_image = COALESCE(#{cover_image}, cover_image)
+     WHERE book_id = #{book_id}
+  </update>
+
+  <!-- 삭제 -->
+  <delete id="deleteBook">
+    DELETE FROM books WHERE book_id = #{bookId}
+  </delete>
+
+	<select id="findOrders" resultType="map">
+	  SELECT
+	    o.order_id     AS "orderId",
+	    o.user_id      AS "userId",
+	    o.status       AS "status",
+	    o.total_amount AS "totalAmount",
+	    o.order_date   AS "orderDate",
+	    o.courier      AS "courier",
+	    o.tracking_no  AS "trackingNo",
+	    o.shipped_at   AS "shippedAt",
+	    o.delivered_at AS "deliveredAt",
+	    o.cancelled_at AS "cancelledAt",
+	    o.address      AS "address",
+	    o.postcode     AS "postcode"
+	  FROM orders o
+	  WHERE 1=1
+	    <if test="status != null and status != ''">
+	      AND o.status = #{status}
+	    </if>
+	  ORDER BY o.order_date DESC, o.order_id DESC
+	</select>
+
+  <update id="updateOrderStatus">
+    UPDATE orders
+       SET status = #{status},
+           shipped_at   = CASE WHEN #{status} = 'SHIPPED'   THEN SYSDATE ELSE shipped_at END,
+           delivered_at = CASE WHEN #{status} = 'DELIVERED' THEN SYSDATE ELSE delivered_at END,
+           cancelled_at = CASE WHEN #{status} = 'CANCELLED' THEN SYSDATE ELSE cancelled_at END
+     WHERE order_id = #{orderId}
+  </update>
+
+  <select id="findOrderItems" resultType="map">
+    SELECT oi.order_item_id AS orderItemId,
+           oi.order_id      AS orderId,
+           oi.book_id       AS bookId,
+           b.title          AS title,
+           b.author         AS author,
+           oi.quantity      AS quantity,
+           oi.unit_price    AS unitPrice
+      FROM order_items oi
+      JOIN books b ON b.book_id = oi.book_id
+     WHERE oi.order_id = #{orderId}
+     ORDER BY oi.order_item_id
+  </select>
+  
+  <!-- 송장/택배사 저장 -->
+<update id="updateOrderCourier">
+  UPDATE orders
+     SET courier     = COALESCE(#{courier}, courier),
+         tracking_no = COALESCE(#{trackingNo}, tracking_no)
+   WHERE order_id    = #{orderId}
+</update>
+
+<!-- ====== 대시보드 차트 데이터 ====== -->
+
+<!-- 최근 30일 일별 매출/주문수 -->
+<select id="selectDailySalesLast30" resultType="map">
+  SELECT
+    TO_CHAR(TRUNC(o.order_date), 'YYYY-MM-DD') AS "day",
+    COUNT(*)                                   AS "orderCount",
+    NVL(SUM(o.total_amount), 0)                AS "amount"
+  FROM orders o
+  WHERE o.status IN ('PAID','SHIPPED','DELIVERED')
+    AND o.order_date >= TRUNC(SYSDATE) - 29
+  GROUP BY TRUNC(o.order_date)
+  ORDER BY TRUNC(o.order_date)
+</select>
+
+<!-- 최근 12개월 월별 매출/주문수 -->
+<select id="selectMonthlySalesLast12" resultType="map">
+  SELECT
+    TO_CHAR(o.order_date, 'YYYY-MM') AS "month",
+    COUNT(*)                          AS "orderCount",
+    NVL(SUM(o.total_amount), 0)       AS "amount"
+  FROM orders o
+  WHERE o.status IN ('PAID','SHIPPED','DELIVERED')
+    AND o.order_date >= ADD_MONTHS(TRUNC(SYSDATE, 'MM'), -11)
+  GROUP BY TO_CHAR(o.order_date, 'YYYY-MM')
+  ORDER BY TO_CHAR(o.order_date, 'YYYY-MM')
+</select>
+
+<!-- 주문 상태 분포 (원형용) -->
+<select id="selectOrderStatusCounts" resultType="map">
+  SELECT o.status AS "status",
+         COUNT(*) AS "count"
+    FROM orders o
+   GROUP BY o.status
+</select>
+
+<!-- 재고 상태 분포 (원형용: 품절/임박/정상) -->
+<select id="selectInventoryBuckets" resultType="map">
+  SELECT
+    SUM(CASE WHEN b.stock = 0               THEN 1 ELSE 0 END) AS "outOfStock",
+    SUM(CASE WHEN b.stock BETWEEN 1 AND 5   THEN 1 ELSE 0 END) AS "lowStock",
+    SUM(CASE WHEN b.stock > 5               THEN 1 ELSE 0 END) AS "okStock"
+  FROM books b
+</select>
+
+
+</mapper>
